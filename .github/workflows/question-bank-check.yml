@@ -1,0 +1,61 @@
+name: English Quest - Question Bank Check
+
+on:
+  push:
+    paths:
+      - 'question-bank.js'
+      - '.github/workflows/question-bank-check.yml'
+  pull_request:
+    paths:
+      - 'question-bank.js'
+  workflow_dispatch:
+  schedule:
+    - cron: '17 2 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  validate-question-bank:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate bank and report coverage
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const code = fs.readFileSync('question-bank.js', 'utf8');
+          const vm = require('vm');
+          const sandbox = { console, module: { exports: {} }, window: {} };
+          vm.createContext(sandbox);
+          vm.runInContext(code, sandbox, { timeout: 5000 });
+          const bank = sandbox.module.exports.ENGLISH_QUESTIONS || sandbox.window.ENGLISH_QUESTIONS;
+          if (!Array.isArray(bank)) throw new Error('Question bank is not an array');
+          if (bank.length < 3500) throw new Error(`Expected at least 3500 questions, found ${bank.length}`);
+
+          const required = ['id','grade','world','topic','skill','difficulty','type','question','correctAnswer','explanation'];
+          const ids = new Set();
+          const types = new Set();
+          const grades = new Map();
+          for (const item of bank) {
+            for (const key of required) if (item[key] === undefined || item[key] === '') throw new Error(`Missing ${key} in ${item.id}`);
+            if (ids.has(item.id)) throw new Error(`Duplicate question id: ${item.id}`);
+            ids.add(item.id); types.add(item.type);
+            grades.set(item.grade, (grades.get(item.grade) || 0) + 1);
+            if (!Number.isInteger(item.difficulty) || item.difficulty < 1 || item.difficulty > 5) throw new Error(`Invalid difficulty in ${item.id}`);
+          }
+          for (let grade = 6; grade <= 12; grade++) {
+            const count = grades.get(grade) || 0;
+            if (count < 500) throw new Error(`Grade ${grade} has only ${count} questions`);
+          }
+          console.log(`Validated ${bank.length} questions`);
+          console.log(`Question types: ${[...types].join(', ')}`);
+          console.log(`Grades: ${[...grades.entries()].map(([g,c]) => `${g}:${c}`).join(' | ')}`);
+          NODE
